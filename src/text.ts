@@ -162,7 +162,7 @@ export default async function* buildTextNodes(
       // For `pre`, only break the line for `\n`.
       breakSegment = word[0] === '\n'
     } else if (whiteSpace !== 'nowrap') {
-      // For `normal`, `pre-wrap`, we can wrap with any word separators or
+      // For `normal`, `pre-wrap`, `pre-line` we can wrap with any word separators or
       // images.
       if (isImage || wordSeparators.includes(word[0])) {
         breakSegment = true
@@ -209,14 +209,18 @@ export default async function* buildTextNodes(
     parent.setFlexShrink(1)
   }
 
-  const shouldAlwaysBreakLine =
-    whiteSpace === 'pre-wrap' || whiteSpace === 'pre'
+  const shouldKeepLinebreak = ['pre', 'pre-wrap', 'pre-line'].includes(
+    whiteSpace as string
+  )
+  const shouldCollapseWhitespace = !['pre', 'pre-wrap'].includes(
+    whiteSpace as string
+  )
 
   textContainer.setMeasureFunc((width) => {
     let lines = 0
     let remainingSpace = ''
     let remainingSpaceWidth = 0
-    let currentWidth = 0
+    let _currentWidth = 0
     let maxWidth = 0
     let lineIndex = -1
     let height = 0
@@ -232,16 +236,19 @@ export default async function* buildTextNodes(
     for (let i = 0; i < words.length; i++) {
       const word = words[i]
 
+      const forceBreak = shouldKeepLinebreak && word === '\n'
+
       // A character is a word separator if `white-space` is not `pre`.
       if (
-        !shouldAlwaysBreakLine &&
+        shouldCollapseWhitespace &&
         wordSeparators.includes(
           // It's possible that the segment contains multiple separate words such
           // as `  `. We can just use the first character to detect.
           word[0]
-        )
+        ) &&
+        !forceBreak
       ) {
-        // Since `white-space` is not `pre`, multiple whitespaces are considered
+        // Multiple whitespaces are considered
         // as one.
         if (!remainingSpace) {
           remainingSpace = ' '
@@ -249,37 +256,42 @@ export default async function* buildTextNodes(
         remainingSpaceWidth = measureWithCache([remainingSpace])
         wordsInLayout[i] = null
       } else {
-        const forceBreak = shouldAlwaysBreakLine && word === '\n'
         const w = forceBreak
           ? 0
           : graphemeImages && graphemeImages[word]
           ? (parentStyle.fontSize as number)
           : measureWithCache([word])
 
+        // When starting a new line from an empty line, we should push one extra
+        // line height.
+        if (forceBreak && currentLineHeight === 0) {
+          currentLineHeight = engine.height(word)
+        }
+
         // This is the start of the line, we can ignore all spaces here.
-        if (!currentWidth) {
+        if (!_currentWidth) {
           remainingSpace = ''
           remainingSpaceWidth = 0
         }
 
         const allowedToPutAtBeginning =
           remainingSpaceWidth || ',.!?:-@)>]}%#'.indexOf(word[0]) < 0
-        const allowedToJustify = !currentWidth || !!remainingSpaceWidth
+        const allowedToJustify = !_currentWidth || !!remainingSpaceWidth
 
         if (
           forceBreak ||
           (i &&
             allowedToPutAtBeginning &&
-            currentWidth + remainingSpaceWidth + w > width &&
+            _currentWidth + remainingSpaceWidth + w > width &&
             whiteSpace !== 'nowrap' &&
             whiteSpace !== 'pre')
         ) {
           // Start a new line, spaces can be ignored.
-          lineWidths.push(currentWidth)
+          lineWidths.push(_currentWidth)
           baselines.push(currentBaselineOffset)
           lines++
           height += currentLineHeight
-          currentWidth = w
+          _currentWidth = w
           currentLineHeight = w ? engine.height(word) : 0
           currentBaselineOffset = w ? engine.baseline(word) : 0
           lineSegmentNumber.push(1)
@@ -293,7 +305,7 @@ export default async function* buildTextNodes(
           }
         } else {
           // It fits into the current line.
-          currentWidth += remainingSpaceWidth + w
+          _currentWidth += remainingSpaceWidth + w
           const glyphHeight = engine.height(word)
           if (glyphHeight > currentLineHeight) {
             // Use the baseline of the highest segment as the baseline of the line.
@@ -312,19 +324,19 @@ export default async function* buildTextNodes(
           lineIndex++
         }
 
-        maxWidth = Math.max(maxWidth, currentWidth)
+        maxWidth = Math.max(maxWidth, _currentWidth)
         wordsInLayout[i] = {
           y: height,
-          x: currentWidth - w,
+          x: _currentWidth - w,
           width: w,
           line: lines,
           lineIndex,
         }
       }
     }
-    if (currentWidth) {
+    if (_currentWidth) {
       lines++
-      lineWidths.push(currentWidth)
+      lineWidths.push(_currentWidth)
       baselines.push(currentBaselineOffset)
       height += currentLineHeight
     }
@@ -587,7 +599,7 @@ export default async function* buildTextNodes(
           })
         : ''
 
-    if (!!_inheritedBackgroundClipTextPath) {
+    if (_inheritedBackgroundClipTextPath) {
       backgroundClipDef = buildXMLString('path', {
         d: mergedPath,
         transform: matrix ? matrix : undefined,

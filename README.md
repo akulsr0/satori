@@ -24,6 +24,7 @@ const svg = await satori(
     fonts: [
       {
         name: 'Roboto',
+        // Use `fs` (Node.js only) or `fetch` to read the font as Buffer/ArrayBuffer and provide `data` here.
         data: robotoArrayBuffer,
         weight: 400,
         style: 'normal',
@@ -48,8 +49,7 @@ Under the hood, it handles layout calculation, font, typography and more, to gen
 ### JSX
 
 Satori only accepts JSX elements that are pure and stateless. You can use a subset of HTML
-elements (see section below), or custom React components, but React APIs such as `useState` and
-`useEffect` are not supported.
+elements (see section below), or custom React components, but React APIs such as `useState`, `useEffect`, `dangerouslySetInnerHTML` are not supported.
 
 #### Use without JSX
 
@@ -184,7 +184,7 @@ Satori uses the same Flexbox [layout engine](https://yogalayout.com) as React Na
 <tr><td><code>textShadow</code></td><td>Support single shadow</td></tr>
 <tr><td><code>lineHeight</code></td><td>Supported</td></tr>
 <tr><td><code>letterSpacing</code></td><td>Supported</td></tr>
-<tr><td><code>whiteSpace</code></td><td><code>normal</code>, <code>pre</code>, <code>pre-wrap</code>, <code>nowrap</code>, defaults to <code>normal</code></td></tr>
+<tr><td><code>whiteSpace</code></td><td><code>normal</code>, <code>pre</code>, <code>pre-wrap</code>, <code>pre-line</code>, <code>nowrap</code>, defaults to <code>normal</code></td></tr>
 <tr><td><code>wordBreak</code></td><td><code>normal</code>, <code>break-all</code>, <code>break-word</code>, <code>keep-all</code>, defaults to <code>normal</code></td></tr>
 
 <tr><td rowspan="7">Background</td></tr>

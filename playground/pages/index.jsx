@@ -1,3 +1,4 @@
+import React from 'react'
 import satori from 'satori'
 import { LiveProvider, LiveContext, withLive } from 'react-live'
 import { useEffect, useState, useRef, useContext } from 'react'
@@ -6,7 +7,6 @@ import Editor, { useMonaco } from '@monaco-editor/react'
 import toast, { Toaster } from 'react-hot-toast'
 import copy from 'copy-to-clipboard'
 import packageJson from 'satori/package.json'
-import * as resvg from '@resvg/resvg-wasm'
 import * as fflate from 'fflate'
 import { Base64 } from 'js-base64'
 import PDFDocument from 'pdfkit/js/pdfkit.standalone.js'
@@ -115,14 +115,33 @@ const spinner = (
   </svg>
 )
 
-async function initResvg() {
+function initResvgWorker() {
   if (typeof window === 'undefined') return
-  if (globalThis.resvgInitialized) return
-  globalThis.resvgInitialized = true
 
-  // Can always be delayed a bit to unblock other resources.
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  await fetch('/resvg.wasm').then((res) => resvg.initWasm(res))
+  const worker = new Worker(
+    new URL('../components/resvg_worker.ts', import.meta.url)
+  )
+
+  const pending = new Map()
+  worker.onmessage = (e) => {
+    const { _id, url } = e.data
+    const resolve = pending.get(_id)
+    if (resolve) {
+      resolve(url)
+      pending.delete(_id)
+    }
+  }
+
+  return async (msg) => {
+    const _id = Math.random()
+    worker.postMessage({
+      ...msg,
+      _id,
+    })
+    return new Promise((resolve) => {
+      pending.set(_id, resolve)
+    })
+  }
 }
 
 async function init() {
@@ -173,7 +192,7 @@ async function init() {
 }
 
 const loadFonts = init()
-const loadResvg = initResvg()
+const renderPNG = initResvgWorker()
 
 function Tabs({ options, onChange, children }) {
   const [active, setActive] = useState(options[0])
@@ -308,17 +327,19 @@ function LiveEditor({ id }) {
         editedCards[id] = newCode
         onChange(newCode)
       }}
-      onMount={async (editor, monaco) => {
-        const modelUri = monaco.Uri.file('satori.tsx')
-        const codeModel = monaco.editor.createModel(
+      onMount={async (editor, _monaco) => {
+        const modelUri = _monaco.Uri.file('satori.tsx')
+        const codeModel = _monaco.editor.createModel(
           editedCards[id],
           'typescript',
           modelUri // Pass the file name to the model here.
         )
-        monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+        _monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
           jsx: 'react',
         })
-        monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({})
+        _monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(
+          {}
+        )
         editor.setModel(codeModel)
       }}
       options={{
@@ -380,6 +401,14 @@ const LiveSatori = withLive(function ({ live }) {
     )
   }
 
+  function getAspectRatio(ratio, H_SIZE = 1000, V_SIZE = 1000) {
+    const [w, h] = ratio.split(':')
+    return {
+      w: w > h ? H_SIZE : (V_SIZE * w) / h,
+      h: h > w ? V_SIZE : (H_SIZE * h) / w,
+    }
+  }
+
   useEffect(() => {
     ;(async () => {
       setOptions({
@@ -437,34 +466,28 @@ const LiveSatori = withLive(function ({ live }) {
                 loadDynamicAsset(emojiType, ...args),
             })
             if (renderType === 'png') {
-              await loadResvg
-              const renderer = new resvg.Resvg(_result, {
-                fitTo: {
-                  mode: 'width',
-                  value: width,
-                },
+              const url = await renderPNG({
+                svg: _result,
+                width,
               })
-              const pngData = renderer.render()
-              setObjectURL(
-                URL.createObjectURL(new Blob([pngData], { type: 'image/png' }))
-              )
-              // After rendering the PNG @1x quickly, we render the PNG @2x for
-              // the playground only to make it look less blurry.
-              setTimeout(() => {
-                if (cancelled) return
-                const renderer = new resvg.Resvg(_result, {
-                  fitTo: {
-                    mode: 'width',
-                    value: width * 2,
-                  },
-                })
-                const pngData = renderer.render()
-                setObjectURL(
-                  URL.createObjectURL(
-                    new Blob([pngData], { type: 'image/png' })
-                  )
-                )
-              }, 20)
+              if (!cancelled) {
+                setObjectURL(url)
+
+                // After rendering the PNG @1x quickly, we render the PNG @2x for
+                // the playground only to make it look less blurry.
+                // We only do that for images that are not too big (1200^2).
+                if (width * height <= 1440000) {
+                  setTimeout(async () => {
+                    if (cancelled) return
+                    const _url = await renderPNG({
+                      svg: _result,
+                      width: width * 2,
+                    })
+                    if (cancelled) return
+                    setObjectURL(_url)
+                  }, 20)
+                }
+              }
             }
             if (renderType === 'pdf') {
               const doc = new PDFDocument({
@@ -532,9 +555,9 @@ const LiveSatori = withLive(function ({ live }) {
           'HTML (Native)',
         ]}
         onChange={(text) => {
-          const renderType = text.split(' ')[0].toLowerCase()
+          const _renderType = text.split(' ')[0].toLowerCase()
           // 'svg' | 'png' | 'html' | 'pdf'
-          setRenderType(renderType)
+          setRenderType(_renderType)
         }}
       >
         <div className='preview-card'>
@@ -550,8 +573,8 @@ const LiveSatori = withLive(function ({ live }) {
               renderType !== 'svg'
                 ? undefined
                 : {
-                    __html: `<div style="position:absolute;width:${width}px;height:${height}px;transform:scale(${scaleRatio});display:flex;align-items:center;justify-content:center">${result}</div>`,
-                  }
+                  __html: `<div style="position:absolute;width:${width}px;height:${height}px;transform:scale(${scaleRatio});display:flex;align-items:center;justify-content:center">${result}</div>`,
+                }
             }
           >
             {renderType === 'html' ? (
@@ -619,7 +642,7 @@ const LiveSatori = withLive(function ({ live }) {
               {renderType === 'pdf' || renderType === 'png' ? (
                 <>
                   {' '}
-                  <a href={objectURL} target='_blank'>
+                  <a href={objectURL} target='_blank' rel='noreferrer'>
                     (View in New Tab ↗)
                   </a>
                 </>
@@ -681,7 +704,7 @@ const LiveSatori = withLive(function ({ live }) {
             </div>
           </div>
           <div className='control'>
-            <label htmlFor='reset'>Reset Size</label>
+            <label htmlFor='reset'>Size</label>
             <button
               id='reset'
               onClick={() => {
@@ -691,6 +714,16 @@ const LiveSatori = withLive(function ({ live }) {
             >
               Reset
             </button>
+            <button type='button' onClick={() => {
+              const { w, h } = getAspectRatio('2:1')
+              setWidth(w)
+              setHeight(h)
+            }}>2:1</button>
+            <button type='button' onClick={() => {
+              const { w, h } = getAspectRatio('1.9:1')
+              setWidth(w)
+              setHeight(h)
+            }}>1.9:1</button>
           </div>
           <div className='control'>
             <label htmlFor='debug'>Debug Mode</label>
@@ -738,6 +771,7 @@ const LiveSatori = withLive(function ({ live }) {
               }
               target={result ? '_blank' : ''}
               download={result ? 'image.svg' : false}
+              rel='noreferrer'
             >
               Export SVG
             </a>
@@ -755,7 +789,11 @@ const LiveSatori = withLive(function ({ live }) {
           </div>
           <div className='control'>
             <label>Satori Version</label>
-            <a href='https://github.com/vercel/satori' target='_blank'>
+            <a
+              href='https://github.com/vercel/satori'
+              target='_blank'
+              rel='noreferrer'
+            >
               {packageJson.version}
             </a>
           </div>
@@ -816,7 +854,9 @@ export default function Playground() {
     try {
       const hasVisited = localStorage.getItem('_vercel_og_playground_visited')
       if (hasVisited) return
-    } catch (e) {}
+    } catch (e) {
+      console.error(e)
+    }
 
     setShowIntroduction(true)
   }, [])
